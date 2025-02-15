@@ -19,6 +19,7 @@ def create_transactions_table():
             origin_account_id INT NOT NULL,
             destination_account_id INT NOT NULL,
             amount DECIMAL(10, 2) NOT NULL,
+            user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
