@@ -37,20 +37,57 @@ def registrar_usuario(username, password_hash):
         cursor.close()
         conn.close()
 
+def verificar_credenciales(username, password):
+    """Verifica si las credenciales proporcionadas son correctas y devuelve un mensaje apropiado"""
+    try:
+        conn, cursor = conectar_db()
+        cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+
+        if not user:
+            return "Acceso denegado: usuario no encontrado."
+
+        stored_password = user[0]
+        if stored_password != hash_password(password):
+            return "Acceso denegado: contraseña incorrecta."
+
+        return "Inicio de sesión exitoso."
+
+    except Exception as e:
+        return f"Error en la autenticación: {e}"
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+
 
 def handle_client(client_socket):
     try:
-        client_socket.sendall(b"Ingrese nombre de usuario: ")
+        client_socket.sendall("Seleccione una opción:\n1. Registrarse\n2. Iniciar sesión\n".encode("utf-8"))
+        opcion = client_socket.recv(1024).decode().strip()
+
+        client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
         username = client_socket.recv(1024).decode().strip()
 
         client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
         password = client_socket.recv(1024).decode().strip()
         password_hash = hash_password(password)
 
-        if registrar_usuario(username, password_hash):
-            client_socket.sendall(b"Registro exitoso.\n")
+        if opcion == "1":
+            if registrar_usuario(username, password_hash):
+                client_socket.sendall("Registro exitoso.\n".encode("utf-8"))
+            else:
+                client_socket.sendall("Usuario ya existe. Registro fallido.\n".encode("utf-8"))
+
+        elif opcion == "2":
+            resultado = verificar_credenciales(username, password)
+            client_socket.sendall(f"{resultado}\n".encode("utf-8"))
+
+
         else:
-            client_socket.sendall(b"Usuario ya existe. Registro fallido.\n")
+            client_socket.sendall("Opción inválida.\n".encode("utf-8"))
 
     except Exception as e:
         print(f"Error: {e}")
@@ -58,7 +95,37 @@ def handle_client(client_socket):
         client_socket.close()
 
 
+def insertar_usuarios_preexistentes():
+    """Inserta un conjunto inicial de usuarios si no existen"""
+    usuarios_iniciales = [
+        ("admin", "admin123"),
+        ("user1", "password1"),
+        ("user2", "password2")
+    ]
+    
+    try:
+        conn, cursor = conectar_db()
+
+        for username, password in usuarios_iniciales:
+            # Revisar si el usuario ya existe
+            cursor.execute("SELECT 1 FROM users WHERE username = %s", (username,))
+            if not cursor.fetchone():  # Si no existe, lo insertamos
+                password_hash = hash_password(password)
+                cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password_hash))
+
+        conn.commit()
+        print("Usuarios preexistentes cargados correctamente.")
+
+    except Exception as e:
+        print(f"Error al insertar usuarios preexistentes: {e}")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def main():
+    insertar_usuarios_preexistentes() #Cargar usuarios preexistentes
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", 3343))
     server.listen(5)

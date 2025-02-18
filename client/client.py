@@ -12,7 +12,12 @@ def client():
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect(("127.0.0.1", 3343))
 
-        # Recibir el mensaje de solicitud de usuario
+        # Recibir el mensaje de solicitud de opción
+        print(client_socket.recv(1024).decode(), end="")  
+        opcion = input().strip()  # Leer la opción del cliente
+        client_socket.sendall(opcion.encode() + b'\n')
+
+        # Recibir el mensaje de solicitud de nombre de usuario
         print(client_socket.recv(1024).decode(), end="")  
         username = input().strip()
         client_socket.sendall(username.encode() + b'\n')
@@ -20,8 +25,7 @@ def client():
         # Recibir el mensaje de solicitud de contraseña
         print(client_socket.recv(1024).decode(), end="")  
         password = input().strip()
-        password_hash = hash_password(password)
-        client_socket.sendall(password_hash.encode() + b'\n')  
+        client_socket.sendall(password.encode() + b'\n')  # Envía la contraseña en texto plano
 
         # Recibir respuesta del servidor
         response = client_socket.recv(1024).decode()

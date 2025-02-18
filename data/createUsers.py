@@ -59,5 +59,8 @@ def insert_users():
     print("Usuarios pre-registrados insertados con éxito ✅")
 
 
+# Crear la tabla antes de insertar los usuarios
+create_table()
+
 # Ejecutar la función
 insert_users()
