@@ -2,7 +2,7 @@ import socket
 import threading
 import psycopg2
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import timedelta
 import signal
 
 MAX_ATTEMPTS = 5
