@@ -1,7 +1,12 @@
 import socket
 import threading
-import hashlib
 import psycopg2
+import bcrypt
+from datetime import datetime, timedelta
+import signal
+
+MAX_ATTEMPTS = 5
+LOCK_TIME = timedelta(minutes=5)
 
 # Conexión a PostgreSQL
 DB_CONFIG = {
@@ -15,20 +20,31 @@ DB_CONFIG = {
 
 def conectar_db():
     """Conecta a PostgreSQL y retorna el cursor y la conexión"""
-    conn = psycopg2.connect(**DB_CONFIG)
-    return conn, conn.cursor()
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn, conn.cursor()
+    except psycopg2.Error as e:
+        print(f"Error al conectar a la base de datos: {e}")
+        return None, None
+    
+
 
 
 def hash_password(password):
-    """Genera un hash SHA-512 de la contraseña"""
-    return hashlib.sha512(password.encode()).hexdigest()
+    """Genera un hash seguro con bcrypt"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode(), salt)
 
 
 def registrar_usuario(username, password_hash):
     """Registra un usuario en la base de datos"""
     try:
         conn, cursor = conectar_db()
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password_hash))
+        if not conn or not cursor:
+            return "Error de conexión a la base de datos."
+
+        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", 
+                       (username, password_hash.decode('utf-8')))  # Guardar como string
         conn.commit()
         return True
     except psycopg2.IntegrityError:
@@ -37,28 +53,90 @@ def registrar_usuario(username, password_hash):
         cursor.close()
         conn.close()
 
+
+def create_login_attempts_table():
+    """Crea la tabla para registrar intentos de login"""
+    conn, cursor = conectar_db()
+    if not conn or not cursor:
+        return "Error de conexión a la base de datos."
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            username VARCHAR(50) PRIMARY KEY,
+            attempts INT DEFAULT 0,
+            last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def create_users_table():
+    """Crea la tabla 'users' si no existe"""
+    conn, cursor = conectar_db()
+    if not conn or not cursor:
+        return
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL
+        )
+    ''')
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 def verificar_credenciales(username, password):
-    """Verifica si las credenciales proporcionadas son correctas y devuelve un mensaje apropiado"""
+    """Verifica credenciales con bloqueo tras varios intentos fallidos"""
     try:
         conn, cursor = conectar_db()
+        if not conn or not cursor:
+            return "Error de conexión a la base de datos."
+        
         cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
 
         if not user:
-            return "Acceso denegado: usuario no encontrado."
+            actualizar_intentos(cursor, conn, username)
+            return "Acceso denegado: credenciales incorrectas."
 
-        stored_password = user[0]
-        if stored_password != hash_password(password):
-            return "Acceso denegado: contraseña incorrecta."
+        stored_password = user[0]  
+
+        # 🔹 Convertir el hash de BYTEA a string UTF-8 si es necesario
+        if isinstance(stored_password, memoryview):  
+            stored_password = stored_password.tobytes().decode('utf-8')
+
+        if not bcrypt.checkpw(password.encode(), stored_password.encode()):
+            actualizar_intentos(cursor, conn, username)
+            return "Acceso denegado: credenciales incorrectas."
+
+        # Restablecer intentos fallidos en caso de éxito
+        cursor.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
+        conn.commit()
 
         return "Inicio de sesión exitoso."
-
-    except Exception as e:
-        return f"Error en la autenticación: {e}"
 
     finally:
         cursor.close()
         conn.close()
+
+
+
+
+def actualizar_intentos(cursor, conn, username):
+    """Actualiza intentos fallidos y bloquea si es necesario"""
+    cursor.execute("SELECT attempts FROM login_attempts WHERE username = %s", (username,))
+    row = cursor.fetchone()
+
+    if row:
+        attempts = row[0] + 1
+        cursor.execute("UPDATE login_attempts SET attempts = %s, last_attempt = CURRENT_TIMESTAMP WHERE username = %s", (attempts, username))
+    else:
+        cursor.execute("INSERT INTO login_attempts (username, attempts) VALUES (%s, 1)", (username,))
+
+    conn.commit()
 
 
 
@@ -105,13 +183,15 @@ def insertar_usuarios_preexistentes():
     
     try:
         conn, cursor = conectar_db()
+        if not conn or not cursor:
+            return "Error de conexión a la base de datos."
 
         for username, password in usuarios_iniciales:
-            # Revisar si el usuario ya existe
             cursor.execute("SELECT 1 FROM users WHERE username = %s", (username,))
-            if not cursor.fetchone():  # Si no existe, lo insertamos
-                password_hash = hash_password(password)
-                cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password_hash))
+            if not cursor.fetchone():
+                password_hash = hash_password(password).decode('utf-8')  # Convertimos a string
+                cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", 
+                               (username, password_hash))
 
         conn.commit()
         print("Usuarios preexistentes cargados correctamente.")
@@ -124,18 +204,33 @@ def insertar_usuarios_preexistentes():
         conn.close()
 
 
+
+
 def main():
-    insertar_usuarios_preexistentes() #Cargar usuarios preexistentes
+    create_users_table()
+    create_login_attempts_table()
+    insertar_usuarios_preexistentes()
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", 3343))
     server.listen(5)
     print("Servidor escuchando en el puerto 3343...")
 
+    # Manejo de interrupción con Ctrl+C
+    def cerrar_servidor(sig, frame):
+        print("\nCerrando servidor...")
+        server.close()
+        exit(0)
+
+    signal.signal(signal.SIGINT, cerrar_servidor)
+
     while True:
         client_socket, addr = server.accept()
-        print(f"Conexion aceptada de {addr}")
-        client_handler = threading.Thread(target=handle_client, args=(client_socket,))
-        client_handler.start()
+        print(f"Conexión aceptada de {addr}")
+        thread = threading.Thread(target=handle_client, args=(client_socket,))
+        thread.daemon = True  # Cierra hilos cuando termina el script
+        thread.start()
+
 
 
 if __name__ == "__main__":

@@ -1,4 +1,10 @@
 import psycopg2
+import bcrypt  # Necesitas instalarlo con `pip install bcrypt`
+
+def hash_password(password):
+    """Genera un hash seguro con bcrypt"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode(), salt)
 
 
 def create_table():
@@ -24,9 +30,7 @@ def create_table():
     conn.close()
     print("Tabla 'users' creada con éxito ✅")
 
-
 def insert_users():
-    # Conexión a la base de datos
     conn = psycopg2.connect(
         dbname="insegus",
         user="st09",
@@ -36,7 +40,6 @@ def insert_users():
     )
     cursor = conn.cursor()
 
-    # Lista de usuarios pre-registrados
     users = [
         ("alice", "password123"),
         ("bob", "securepass"),
@@ -44,23 +47,26 @@ def insert_users():
         ("juan", "12345678"),
     ]
 
-    # Insertar usuarios en la tabla
     for username, password in users:
+        hashed_password = hash_password(password)  # Encriptamos la contraseña
         cursor.execute('''
             INSERT INTO users (username, password)
             VALUES (%s, %s)
             ON CONFLICT (username) DO NOTHING
-        ''', (username, password))
+        ''', (username, hashed_password))
 
-    # Confirmar cambios y cerrar conexión
     conn.commit()
     cursor.close()
     conn.close()
     print("Usuarios pre-registrados insertados con éxito ✅")
 
 
+
+def check_password(stored_password, provided_password):
+    """Verifica si la contraseña proporcionada coincide con la almacenada"""
+    return bcrypt.checkpw(provided_password.encode(), stored_password.encode())
+
+
 # Crear la tabla antes de insertar los usuarios
 create_table()
-
-# Ejecutar la función
 insert_users()
