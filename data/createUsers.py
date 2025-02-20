@@ -73,7 +73,7 @@ def insert_users():
     cursor = conn.cursor()
 
     # Usuarios a crear (nombres sin contraseñas)
-    usernames = ["alice", "bob", "charlie", "juan"]
+    usernames = ["admin1", "admin2", "user1", "user2"]
     passwords = {}
 
     # Cargar o generar la clave de cifrado
