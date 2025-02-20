@@ -1,4 +1,6 @@
 import socket
+import getpass  # Importamos el módulo getpass
+
 
 def client():
     try:
@@ -14,7 +16,9 @@ def client():
         client_socket.sendall(username.encode() + b'\n')
 
         print(client_socket.recv(1024).decode(), end="")
-        password = input().strip()
+        
+        # Utilizamos getpass para ocultar la contraseña
+        password = getpass.getpass("Ingrese su contraseña: ")  
 
         # Enviar la contraseña sin hashear, el servidor lo manejará
         client_socket.sendall(password.encode() + b'\n')  
@@ -27,7 +31,6 @@ def client():
 
     finally:
         client_socket.close()
-
 
 
 if __name__ == "__main__":

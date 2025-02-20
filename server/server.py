@@ -2,7 +2,7 @@ import socket
 import threading
 import psycopg2
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import timedelta
 import signal
 
 MAX_ATTEMPTS = 5
@@ -26,8 +26,6 @@ def conectar_db():
     except psycopg2.Error as e:
         print(f"Error al conectar a la base de datos: {e}")
         return None, None
-    
-
 
 
 def hash_password(password):
@@ -123,8 +121,6 @@ def verificar_credenciales(username, password):
         conn.close()
 
 
-
-
 def actualizar_intentos(cursor, conn, username):
     """Actualiza intentos fallidos y bloquea si es necesario"""
     cursor.execute("SELECT attempts FROM login_attempts WHERE username = %s", (username,))
@@ -137,8 +133,6 @@ def actualizar_intentos(cursor, conn, username):
         cursor.execute("INSERT INTO login_attempts (username, attempts) VALUES (%s, 1)", (username,))
 
     conn.commit()
-
-
 
 
 def handle_client(client_socket):
@@ -163,7 +157,6 @@ def handle_client(client_socket):
             resultado = verificar_credenciales(username, password)
             client_socket.sendall(f"{resultado}\n".encode("utf-8"))
 
-
         else:
             client_socket.sendall("Opción inválida.\n".encode("utf-8"))
 
@@ -173,43 +166,9 @@ def handle_client(client_socket):
         client_socket.close()
 
 
-def insertar_usuarios_preexistentes():
-    """Inserta un conjunto inicial de usuarios si no existen"""
-    usuarios_iniciales = [
-        ("admin", "admin123"),
-        ("user1", "password1"),
-        ("user2", "password2")
-    ]
-    
-    try:
-        conn, cursor = conectar_db()
-        if not conn or not cursor:
-            return "Error de conexión a la base de datos."
-
-        for username, password in usuarios_iniciales:
-            cursor.execute("SELECT 1 FROM users WHERE username = %s", (username,))
-            if not cursor.fetchone():
-                password_hash = hash_password(password).decode('utf-8')  # Convertimos a string
-                cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", 
-                               (username, password_hash))
-
-        conn.commit()
-        print("Usuarios preexistentes cargados correctamente.")
-
-    except Exception as e:
-        print(f"Error al insertar usuarios preexistentes: {e}")
-
-    finally:
-        cursor.close()
-        conn.close()
-
-
-
-
 def main():
     create_users_table()
     create_login_attempts_table()
-    insertar_usuarios_preexistentes()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", 3343))
@@ -230,7 +189,6 @@ def main():
         thread = threading.Thread(target=handle_client, args=(client_socket,))
         thread.daemon = True  # Cierra hilos cuando termina el script
         thread.start()
-
 
 
 if __name__ == "__main__":
