@@ -1,12 +1,42 @@
 import psycopg2
-import bcrypt  # Necesitas instalarlo con `pip install bcrypt`
+import bcrypt
+import secrets
+import string
+from cryptography.fernet import Fernet
 
+
+# Generar y guardar una clave de cifrado
+def generate_encryption_key():
+    key = Fernet.generate_key()
+    with open("encryption_key.key", "wb") as key_file:
+        key_file.write(key)
+    return key
+
+
+# Cargar la clave de cifrado
+def load_encryption_key():
+    return open("encryption_key.key", "rb").read()
+
+
+# Cifrar texto con la clave proporcionada
+def encrypt_text(text, key):
+    fernet = Fernet(key)
+    return fernet.encrypt(text.encode())
+
+
+# Generar contraseñas seguras aleatorias
+def generate_password(length=12):
+    characters = string.ascii_letters + string.digits + string.punctuation
+    return ''.join(secrets.choice(characters) for i in range(length))
+
+
+# Hashear la contraseña para almacenarla en la base de datos
 def hash_password(password):
-    """Genera un hash seguro con bcrypt"""
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode(), salt)
 
 
+# Crear la tabla de usuarios
 def create_table():
     conn = psycopg2.connect(
         dbname="insegus",
@@ -30,6 +60,8 @@ def create_table():
     conn.close()
     print("Tabla 'users' creada con éxito ✅")
 
+
+# Insertar usuarios con contraseñas aleatorias y guardar las contraseñas en un archivo cifrado
 def insert_users():
     conn = psycopg2.connect(
         dbname="insegus",
@@ -40,15 +72,24 @@ def insert_users():
     )
     cursor = conn.cursor()
 
-    users = [
-        ("alice", "password123"),
-        ("bob", "securepass"),
-        ("charlie", "mypassword"),
-        ("juan", "12345678"),
-    ]
+    # Usuarios a crear (nombres sin contraseñas)
+    usernames = ["alice", "bob", "charlie", "juan"]
+    passwords = {}
 
-    for username, password in users:
-        hashed_password = hash_password(password)  # Encriptamos la contraseña
+    # Cargar o generar la clave de cifrado
+    try:
+        key = load_encryption_key()
+        print("Clave de cifrado cargada 🔑")
+    except FileNotFoundError:
+        key = generate_encryption_key()
+        print("Nueva clave de cifrado generada 🔐")
+
+    # Crear contraseñas aleatorias, guardarlas en la base de datos y en el diccionario
+    for username in usernames:
+        password = generate_password()
+        passwords[username] = password
+        hashed_password = hash_password(password)
+
         cursor.execute('''
             INSERT INTO users (username, password)
             VALUES (%s, %s)
@@ -60,13 +101,14 @@ def insert_users():
     conn.close()
     print("Usuarios pre-registrados insertados con éxito ✅")
 
+    # Guardar las contraseñas en un archivo cifrado
+    with open("passwords_encrypted.txt", "wb") as f:
+        for username, password in passwords.items():
+            encrypted_password = encrypt_text(f"{username}:{password}", key)
+            f.write(encrypted_password + b'\n')
+
+    print("Contraseñas guardadas en 'passwords_encrypted.txt' 🔒")
 
 
-def check_password(stored_password, provided_password):
-    """Verifica si la contraseña proporcionada coincide con la almacenada"""
-    return bcrypt.checkpw(provided_password.encode(), stored_password.encode())
-
-
-# Crear la tabla antes de insertar los usuarios
 create_table()
 insert_users()
