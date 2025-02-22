@@ -17,6 +17,9 @@ DB_CONFIG = {
     "port": "5432"
 }
 
+# Diccionario para manejar las sesiones de usuarios
+active_sessions = {}
+
 
 def conectar_db():
     """Conecta a PostgreSQL y retorna el cursor y la conexión"""
@@ -52,23 +55,6 @@ def registrar_usuario(username, password_hash):
         conn.close()
 
 
-def create_login_attempts_table():
-    """Crea la tabla para registrar intentos de login"""
-    conn, cursor = conectar_db()
-    if not conn or not cursor:
-        return "Error de conexión a la base de datos."
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            username VARCHAR(50) PRIMARY KEY,
-            attempts INT DEFAULT 0,
-            last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-
 def create_users_table():
     """Crea la tabla 'users' si no existe"""
     conn, cursor = conectar_db()
@@ -87,7 +73,7 @@ def create_users_table():
 
 
 def verificar_credenciales(username, password):
-    """Verifica credenciales con bloqueo tras varios intentos fallidos"""
+    """Verifica credenciales"""
     try:
         conn, cursor = conectar_db()
         if not conn or not cursor:
@@ -97,22 +83,16 @@ def verificar_credenciales(username, password):
         user = cursor.fetchone()
 
         if not user:
-            actualizar_intentos(cursor, conn, username)
             return "Acceso denegado: credenciales incorrectas."
 
-        stored_password = user[0]  
+        stored_password = user[0]
 
         # 🔹 Convertir el hash de BYTEA a string UTF-8 si es necesario
         if isinstance(stored_password, memoryview):  
             stored_password = stored_password.tobytes().decode('utf-8')
 
         if not bcrypt.checkpw(password.encode(), stored_password.encode()):
-            actualizar_intentos(cursor, conn, username)
             return "Acceso denegado: credenciales incorrectas."
-
-        # Restablecer intentos fallidos en caso de éxito
-        cursor.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
-        conn.commit()
 
         return "Inicio de sesión exitoso."
 
@@ -121,41 +101,43 @@ def verificar_credenciales(username, password):
         conn.close()
 
 
-def actualizar_intentos(cursor, conn, username):
-    """Actualiza intentos fallidos y bloquea si es necesario"""
-    cursor.execute("SELECT attempts FROM login_attempts WHERE username = %s", (username,))
-    row = cursor.fetchone()
-
-    if row:
-        attempts = row[0] + 1
-        cursor.execute("UPDATE login_attempts SET attempts = %s, last_attempt = CURRENT_TIMESTAMP WHERE username = %s", (attempts, username))
-    else:
-        cursor.execute("INSERT INTO login_attempts (username, attempts) VALUES (%s, 1)", (username,))
-
-    conn.commit()
-
-
 def handle_client(client_socket):
     try:
-        client_socket.sendall("Seleccione una opción:\n1. Registrarse\n2. Iniciar sesión\n".encode("utf-8"))
+        client_socket.sendall("Seleccione una opción:\n1. Registrarse\n2. Iniciar sesión\n3. Cerrar sesión\n".encode("utf-8"))
         opcion = client_socket.recv(1024).decode().strip()
 
-        client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
-        username = client_socket.recv(1024).decode().strip()
+        if opcion == "1":  # Registro
+            client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
+            username = client_socket.recv(1024).decode().strip()
+            client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
+            password = client_socket.recv(1024).decode().strip()
+            password_hash = hash_password(password)
 
-        client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
-        password = client_socket.recv(1024).decode().strip()
-        password_hash = hash_password(password)
-
-        if opcion == "1":
             if registrar_usuario(username, password_hash):
                 client_socket.sendall("Registro exitoso.\n".encode("utf-8"))
             else:
                 client_socket.sendall("Usuario ya existe. Registro fallido.\n".encode("utf-8"))
 
-        elif opcion == "2":
+        elif opcion == "2":  # Iniciar sesión
+            client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
+            username = client_socket.recv(1024).decode().strip()
+            client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
+            password = client_socket.recv(1024).decode().strip()
+
             resultado = verificar_credenciales(username, password)
+            if resultado == "Inicio de sesión exitoso.":
+                active_sessions[username] = client_socket  # Guardar sesión activa
             client_socket.sendall(f"{resultado}\n".encode("utf-8"))
+
+        elif opcion == "3":  # Cerrar sesión
+            client_socket.sendall("Ingrese nombre de usuario para cerrar sesión: ".encode("utf-8"))
+            username = client_socket.recv(1024).decode().strip()
+
+            if username in active_sessions:
+                del active_sessions[username]  # Eliminar sesión activa
+                client_socket.sendall(f"Sesión cerrada para {username}\n".encode("utf-8"))
+            else:
+                client_socket.sendall(f"No hay sesión activa para {username}\n".encode("utf-8"))
 
         else:
             client_socket.sendall("Opción inválida.\n".encode("utf-8"))
@@ -168,7 +150,6 @@ def handle_client(client_socket):
 
 def main():
     create_users_table()
-    create_login_attempts_table()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", 3343))
