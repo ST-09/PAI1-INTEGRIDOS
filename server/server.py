@@ -2,7 +2,7 @@ import socket
 import threading
 import psycopg2
 import bcrypt
-from datetime import timedelta
+from datetime import datetime, timedelta
 import signal
 
 MAX_ATTEMPTS = 5
@@ -17,8 +17,10 @@ DB_CONFIG = {
     "port": "5432"
 }
 
-# Diccionario para manejar las sesiones de usuarios
+# Diccionarios para manejar sesiones y bloqueo de usuarios
 active_sessions = {}
+failed_attempts = {}
+locked_users = {}
 
 
 def conectar_db():
@@ -44,8 +46,8 @@ def registrar_usuario(username, password_hash):
         if not conn or not cursor:
             return "Error de conexión a la base de datos."
 
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", 
-                       (username, password_hash.decode('utf-8')))  # Guardar como string
+        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)",
+                       (username, password_hash.decode('utf-8')))
         conn.commit()
         return True
     except psycopg2.IntegrityError:
@@ -73,12 +75,21 @@ def create_users_table():
 
 
 def verificar_credenciales(username, password):
-    """Verifica credenciales"""
+    """Verifica credenciales con protección contra fuerza bruta"""
+    global failed_attempts, locked_users
+
+    # Revisar si el usuario está bloqueado
+    if username in locked_users:
+        if datetime.now() < locked_users[username]:
+            return "Usuario bloqueado temporalmente. Inténtelo más tarde."
+        else:
+            del locked_users[username]  # Desbloquear al usuario
+
     try:
         conn, cursor = conectar_db()
         if not conn or not cursor:
             return "Error de conexión a la base de datos."
-        
+
         cursor.execute("SELECT password FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
 
@@ -86,14 +97,18 @@ def verificar_credenciales(username, password):
             return "Acceso denegado: credenciales incorrectas."
 
         stored_password = user[0]
-
-        # 🔹 Convertir el hash de BYTEA a string UTF-8 si es necesario
-        if isinstance(stored_password, memoryview):  
+        if isinstance(stored_password, memoryview):
             stored_password = stored_password.tobytes().decode('utf-8')
 
         if not bcrypt.checkpw(password.encode(), stored_password.encode()):
+            failed_attempts[username] = failed_attempts.get(username, 0) + 1
+            if failed_attempts[username] >= MAX_ATTEMPTS:
+                locked_users[username] = datetime.now() + LOCK_TIME
+                failed_attempts.pop(username, None)
+                return "Usuario bloqueado temporalmente. Inténtelo más tarde."
             return "Acceso denegado: credenciales incorrectas."
 
+        failed_attempts.pop(username, None)
         return "Inicio de sesión exitoso."
 
     finally:
@@ -126,24 +141,12 @@ def handle_client(client_socket):
 
             resultado = verificar_credenciales(username, password)
             if resultado == "Inicio de sesión exitoso.":
-                active_sessions[username] = client_socket  # Guardar sesión activa
+                active_sessions[username] = client_socket
             client_socket.sendall(f"{resultado}\n".encode("utf-8"))
-
-        elif opcion == "3":  # Cerrar sesión
-            client_socket.sendall("Ingrese nombre de usuario para cerrar sesión: ".encode("utf-8"))
-            username = client_socket.recv(1024).decode().strip()
-
-            if username in active_sessions:
-                del active_sessions[username]  # Eliminar sesión activa
-                client_socket.sendall(f"Sesión cerrada para {username}\n".encode("utf-8"))
-            else:
-                client_socket.sendall(f"No hay sesión activa para {username}\n".encode("utf-8"))
 
         else:
             client_socket.sendall("Opción inválida.\n".encode("utf-8"))
 
-    except Exception as e:
-        print(f"Error: {e}")
     finally:
         client_socket.close()
 
@@ -156,7 +159,6 @@ def main():
     server.listen(5)
     print("Servidor escuchando en el puerto 3343...")
 
-    # Manejo de interrupción con Ctrl+C
     def cerrar_servidor(sig, frame):
         print("\nCerrando servidor...")
         server.close()
@@ -168,7 +170,7 @@ def main():
         client_socket, addr = server.accept()
         print(f"Conexión aceptada de {addr}")
         thread = threading.Thread(target=handle_client, args=(client_socket,))
-        thread.daemon = True  # Cierra hilos cuando termina el script
+        thread.daemon = True
         thread.start()
 
 
