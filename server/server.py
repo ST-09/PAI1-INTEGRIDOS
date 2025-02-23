@@ -3,6 +3,24 @@ import threading
 import psycopg2
 import bcrypt
 from datetime import datetime, timedelta
+import hmac
+import hashlib
+import os
+import base64
+
+SECRET_KEY = b"mi_clave_secreta"
+
+
+# Generar un NONCE aleatorio
+def generate_nonce(length=16):
+    return base64.b64encode(os.urandom(length)).decode('utf-8')
+
+
+# Crear un HMAC con el mensaje y el NONCE
+def generate_hmac(message, nonce, secret_key=SECRET_KEY):
+    hmac_obj = hmac.new(secret_key, f"{message}{nonce}".encode(), hashlib.sha256)
+    return hmac_obj.hexdigest()
+
 
 MAX_ATTEMPTS = 5
 LOCK_TIME = timedelta(minutes=5)
@@ -18,6 +36,7 @@ DB_CONFIG = {
 active_sessions = {}
 failed_attempts = {}
 locked_users = {}
+locked_nonces = set() #NONCES usados
 
 
 def conectar_db():
@@ -124,7 +143,7 @@ def handle_client(client_socket):
             else:
                 client_socket.sendall("Usuario ya existe. Registro fallido.\n".encode("utf-8"))
 
-        elif opcion == "2":
+        if opcion == "2":
             client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
             username = client_socket.recv(1024).decode().strip()
             client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
@@ -133,17 +152,32 @@ def handle_client(client_socket):
             resultado = verificar_credenciales(username, password)
             if resultado == "Inicio de sesión exitoso.":
                 active_sessions[username] = client_socket
-            client_socket.sendall(f"{resultado}\n".encode("utf-8"))
+
+                # Generar y enviar NONCE
+                nonce = generate_nonce()
+                locked_nonces.add(nonce)
+
+                # Generar y enviar HMAC
+                hmac_value = generate_hmac(resultado, nonce)
+                client_socket.sendall(f"{resultado}\nNONCE:{nonce}\nHMAC:{hmac_value}\n".encode("utf-8"))
+            else:
+                client_socket.sendall(f"{resultado}\n".encode("utf-8"))
 
         elif opcion == "4":
             client_socket.sendall("Ingrese su nombre de usuario: ".encode("utf-8"))
             username = client_socket.recv(1024).decode().strip()
-            
+
             if username in active_sessions:
-                client_socket.sendall("Introduzca la transacción (Cuenta origen, Cuenta destino, Cantidad transferida): ".encode("utf-8"))
+                client_socket.sendall("Introduzca la transacción: ".encode("utf-8"))
                 transaccion = client_socket.recv(1024).decode().strip()
-                print(f"Transacción realizada por {username}: {transaccion}")
-                client_socket.sendall("Transacción completada.\n".encode("utf-8"))
+
+                # Generar NONCE para la transacción
+                nonce = generate_nonce()
+                locked_nonces.add(nonce)
+
+                # Generar y enviar HMAC
+                hmac_value = generate_hmac(transaccion, nonce)
+                client_socket.sendall(f"Transacción completada.\nNONCE:{nonce}\nHMAC:{hmac_value}\n".encode("utf-8"))
             else:
                 client_socket.sendall("Usuario no tiene sesión activa.\n".encode("utf-8"))
 
