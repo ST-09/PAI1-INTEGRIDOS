@@ -3,12 +3,10 @@ import threading
 import psycopg2
 import bcrypt
 from datetime import datetime, timedelta
-import signal
 
 MAX_ATTEMPTS = 5
 LOCK_TIME = timedelta(minutes=5)
 
-# Conexión a PostgreSQL
 DB_CONFIG = {
     "dbname": "insegus",
     "user": "st09",
@@ -17,14 +15,12 @@ DB_CONFIG = {
     "port": "5432"
 }
 
-# Diccionarios para manejar sesiones y bloqueo de usuarios
 active_sessions = {}
 failed_attempts = {}
 locked_users = {}
 
 
 def conectar_db():
-    """Conecta a PostgreSQL y retorna el cursor y la conexión"""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         return conn, conn.cursor()
@@ -34,13 +30,11 @@ def conectar_db():
 
 
 def hash_password(password):
-    """Genera un hash seguro con bcrypt"""
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode(), salt)
 
 
 def registrar_usuario(username, password_hash):
-    """Registra un usuario en la base de datos"""
     try:
         conn, cursor = conectar_db()
         if not conn or not cursor:
@@ -51,14 +45,13 @@ def registrar_usuario(username, password_hash):
         conn.commit()
         return True
     except psycopg2.IntegrityError:
-        return False  # Usuario ya existe
+        return False
     finally:
         cursor.close()
         conn.close()
 
 
 def create_users_table():
-    """Crea la tabla 'users' si no existe"""
     conn, cursor = conectar_db()
     if not conn or not cursor:
         return
@@ -75,15 +68,13 @@ def create_users_table():
 
 
 def verificar_credenciales(username, password):
-    """Verifica credenciales con protección contra fuerza bruta"""
     global failed_attempts, locked_users
 
-    # Revisar si el usuario está bloqueado
     if username in locked_users:
         if datetime.now() < locked_users[username]:
             return "Usuario bloqueado temporalmente. Inténtelo más tarde."
         else:
-            del locked_users[username]  # Desbloquear al usuario
+            del locked_users[username]
 
     try:
         conn, cursor = conectar_db()
@@ -118,10 +109,10 @@ def verificar_credenciales(username, password):
 
 def handle_client(client_socket):
     try:
-        client_socket.sendall("Seleccione una opción:\n1. Registrarse\n2. Iniciar sesión\n3. Cerrar sesión\n".encode("utf-8"))
+        client_socket.sendall("Seleccione una opción:\n1. Registrarse\n2. Iniciar sesión\n3. Cerrar sesión\n4. Realizar transacción\n".encode("utf-8"))
         opcion = client_socket.recv(1024).decode().strip()
 
-        if opcion == "1":  # Registro
+        if opcion == "1":
             client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
             username = client_socket.recv(1024).decode().strip()
             client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
@@ -133,7 +124,7 @@ def handle_client(client_socket):
             else:
                 client_socket.sendall("Usuario ya existe. Registro fallido.\n".encode("utf-8"))
 
-        elif opcion == "2":  # Iniciar sesión
+        elif opcion == "2":
             client_socket.sendall("Ingrese nombre de usuario: ".encode("utf-8"))
             username = client_socket.recv(1024).decode().strip()
             client_socket.sendall("Ingrese contraseña: ".encode("utf-8"))
@@ -143,6 +134,18 @@ def handle_client(client_socket):
             if resultado == "Inicio de sesión exitoso.":
                 active_sessions[username] = client_socket
             client_socket.sendall(f"{resultado}\n".encode("utf-8"))
+
+        elif opcion == "4":
+            client_socket.sendall("Ingrese su nombre de usuario: ".encode("utf-8"))
+            username = client_socket.recv(1024).decode().strip()
+            
+            if username in active_sessions:
+                client_socket.sendall("Introduzca la transacción (Cuenta origen, Cuenta destino, Cantidad transferida): ".encode("utf-8"))
+                transaccion = client_socket.recv(1024).decode().strip()
+                print(f"Transacción realizada por {username}: {transaccion}")
+                client_socket.sendall("Transacción completada.\n".encode("utf-8"))
+            else:
+                client_socket.sendall("Usuario no tiene sesión activa.\n".encode("utf-8"))
 
         else:
             client_socket.sendall("Opción inválida.\n".encode("utf-8"))
@@ -158,13 +161,6 @@ def main():
     server.bind(("0.0.0.0", 3343))
     server.listen(5)
     print("Servidor escuchando en el puerto 3343...")
-
-    def cerrar_servidor(sig, frame):
-        print("\nCerrando servidor...")
-        server.close()
-        exit(0)
-
-    signal.signal(signal.SIGINT, cerrar_servidor)
 
     while True:
         client_socket, addr = server.accept()
